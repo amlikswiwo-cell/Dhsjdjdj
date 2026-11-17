@@ -174,8 +174,8 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = secrets.token_hex(10).upper()
     save_offer(code, update.effective_user.id, gift, amount, lang, currency)
     await update.effective_message.reply_text(
-        "Оффер сохранён. Отправь этот одноразовый код в чат с покупателем:\\n\\n"
-        f"`{code}`\\n\\n"
+        "Оффер сохранён. Отправь этот одноразовый код в чат с покупателем:\n\n"
+        f"`{code}`\n\n"
         "Бот удалит сообщение с кодом и отправит оффер в этот чат."
     )
 
@@ -190,12 +190,12 @@ async def send_offer(chat_id, gift, amount, lang, currency, context):
     message = await context.bot.send_message(
         chat_id=chat_id,
         text=(
-            f'{t["title"]}\\n\\n'
-            f'🎁 {t["gift"]}: {gift}\\n'
-            f'🎨 {gift_url}\\n'
-            f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\\n'
-            f'⏳ {t["expires"]}: 5 ч 59 мин\\n\\n'
-            f'{t["prompt"]}\\n'
+            f'{t["title"]}\n\n'
+            f'🎁 {t["gift"]}: {gift}\n'
+            f'🎨 {gift_url}\n'
+            f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\n'
+            f'⏳ {t["expires"]}: 5 ч 59 мин\n\n'
+            f'{t["prompt"]}\n'
             'ℹ️ Выбор оффера не подтверждает оплату или передачу подарка.'
         ),
         reply_markup=keyboard,
