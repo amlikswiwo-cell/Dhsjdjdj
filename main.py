@@ -2,12 +2,15 @@ import os
 import logging
 import threading
 import secrets
+import sqlite3
+import re
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import quote
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+    MessageHandler, filters,
 )
 
 logging.basicConfig(
@@ -19,6 +22,36 @@ log = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OFFER_SECONDS = 5 * 60 * 60 + 59 * 60
 MANAGER_LINK = "tg://send_gift?to=Autooffersgift"
+DB_PATH = os.environ.get("OFFERS_DB", "offers.sqlite3")
+CODE_RE = re.compile(r"^[A-F0-9]{20}$")
+
+
+def init_db():
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute("""CREATE TABLE IF NOT EXISTS pending_offers (
+            code TEXT PRIMARY KEY, creator_id INTEGER NOT NULL, gift TEXT NOT NULL,
+            amount TEXT NOT NULL, lang TEXT NOT NULL, currency TEXT NOT NULL,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )""")
+
+
+def save_offer(code, creator_id, gift, amount, lang, currency):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "INSERT INTO pending_offers(code, creator_id, gift, amount, lang, currency) VALUES (?, ?, ?, ?, ?, ?)",
+            (code, creator_id, gift, amount, lang, currency),
+        )
+
+
+def take_offer(code, creator_id):
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute(
+            "SELECT gift, amount, lang, currency FROM pending_offers WHERE code=? AND creator_id=?",
+            (code, creator_id),
+        ).fetchone()
+        if row:
+            db.execute("DELETE FROM pending_offers WHERE code=?", (code,))
+        return row
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -138,20 +171,33 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.effective_message.reply_text(TEXT[lang]["bad"])
         return
 
+    code = secrets.token_hex(10).upper()
+    save_offer(code, update.effective_user.id, gift, amount, lang, currency)
+    await update.effective_message.reply_text(
+        "Оффер сохранён. Отправь этот одноразовый код в чат с покупателем:\\n\\n"
+        f"`{code}`\\n\\n"
+        "Бот удалит сообщение с кодом и отправит оффер в этот чат."
+    )
+
+
+async def send_offer(chat_id, gift, amount, lang, currency, context):
     t = TEXT[lang]
     gift_url = "https://t.me/nft/" + quote(gift, safe="-_")
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(t["accept"], callback_data=f"choose:{lang}"),
         InlineKeyboardButton(t["decline"], callback_data=f"decline:{lang}"),
     ]])
-    message = await update.effective_message.reply_text(
-        f'{t["title"]}\n\n'
-        f'🎁 {t["gift"]}: {gift}\n'
-        f'🎨 {gift_url}\n'
-        f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\n'
-        f'⏳ {t["expires"]}: 5 ч 59 мин\n\n'
-        f'{t["prompt"]}\n'
-        'ℹ️ Выбор оффера не подтверждает оплату или передачу подарка.',
+    message = await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            f'{t["title"]}\\n\\n'
+            f'🎁 {t["gift"]}: {gift}\\n'
+            f'🎨 {gift_url}\\n'
+            f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\\n'
+            f'⏳ {t["expires"]}: 5 ч 59 мин\\n\\n'
+            f'{t["prompt"]}\\n'
+            'ℹ️ Выбор оффера не подтверждает оплату или передачу подарка.'
+        ),
         reply_markup=keyboard,
         disable_web_page_preview=False,
     )
@@ -160,6 +206,23 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         data={"chat_id": message.chat_id, "message_id": message.message_id, "lang": lang},
         name=f"offer-{message.chat_id}-{message.message_id}",
     )
+
+
+async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    user = update.effective_user
+    code = (message.text or "").strip().upper()
+    if not CODE_RE.fullmatch(code):
+        return
+    row = take_offer(code, user.id)
+    if not row:
+        return
+    try:
+        await message.delete()
+    except Exception:
+        log.warning("Could not delete offer code message; check bot admin permissions")
+    gift, amount, lang, currency = row
+    await send_offer(message.chat_id, gift, amount, lang, currency, context)
 
 
 async def expire_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -237,11 +300,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 def main() -> None:
+    init_db()
     start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("offer", offer))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code))
     app.add_handler(CallbackQueryHandler(handle_choice, pattern=r"^(choose|decline):(ru|en|zh)$"))
     app.add_handler(CallbackQueryHandler(handle_confirm, pattern=r"^confirm:(ru|en|zh):[A-F0-9]+$"))
     app.run_polling()
