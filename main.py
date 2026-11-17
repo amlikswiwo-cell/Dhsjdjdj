@@ -1,5 +1,7 @@
 import os
 import logging
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from datetime import datetime, timedelta, timezone
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -16,6 +18,33 @@ log = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 OFFER_SECONDS = 5 * 60 * 60 + 59 * 60
+
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path in ("/", "/health", "/healthz"):
+            body = b"OK"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+    def log_message(self, format, *args):
+        # Keep routine health checks out of the logs.
+        return
+
+
+def start_health_server():
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    log.info("Health server listening on 0.0.0.0:%s", port)
+
 
 TEXT = {
     "ru": {
@@ -97,7 +126,6 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     t = TEXT[lang]
-    expires_at = datetime.now(timezone.utc) + timedelta(seconds=OFFER_SECONDS)
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton(t["accept"], callback_data=f"choose:{lang}"),
@@ -137,8 +165,6 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     action, lang = query.data.split(":", 1)
     response = TEXT[lang]["chosen"] if action == "choose" else TEXT[lang]["declined"]
     try:
-        # Show the result only to the person who tapped; do not post a public reply
-        # that could expose their choice or invite contact in a group chat.
         await query.answer(response, show_alert=True)
         await query.edit_message_reply_markup(reply_markup=None)
     except Exception:
@@ -150,6 +176,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 def main() -> None:
+    start_health_server()
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
