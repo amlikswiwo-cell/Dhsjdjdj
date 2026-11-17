@@ -43,20 +43,19 @@ def save_offer(code, creator_id, gift, amount, lang, currency):
         )
 
 
-def get_offer(code, creator_id):
+def get_offer(code, creator_id=None):
+    # Codes are deliberately transferable: they are created in the bot DM
+    # and redeemed in the seller's Telegram Business chat by a different user.
     with sqlite3.connect(DB_PATH) as db:
         return db.execute(
-            "SELECT gift, amount, lang, currency FROM pending_offers WHERE code=? AND creator_id=?",
-            (code, creator_id),
+            "SELECT gift, amount, lang, currency FROM pending_offers WHERE code=?",
+            (code,),
         ).fetchone()
 
 
-def consume_offer(code, creator_id):
+def consume_offer(code, creator_id=None):
     with sqlite3.connect(DB_PATH) as db:
-        db.execute(
-            "DELETE FROM pending_offers WHERE code=? AND creator_id=?",
-            (code, creator_id),
-        )
+        db.execute("DELETE FROM pending_offers WHERE code=?", (code,))
 
 
 class HealthHandler(BaseHTTPRequestHandler):
