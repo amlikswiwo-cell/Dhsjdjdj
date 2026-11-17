@@ -124,6 +124,7 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = await update.effective_message.reply_text(
         f'{t["title"]}\n\n'
         f'{t["gift"]}: {gift}\n'
+        f'🎨 https://t.me/nft/{gift}\n'
         f'{t["price"]}: {amount} {CURRENCIES[currency]}\n'
         f'{t["expires"]}: 5 ч. 59 м.\n\n'
         "ℹ️ Выбор предложения не подтверждает оплату или передачу подарка.",
