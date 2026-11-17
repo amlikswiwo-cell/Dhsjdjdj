@@ -16,7 +16,6 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
-ADMIN_ID = int(os.environ.get("ADMIN_ID", "0"))
 OFFER_SECONDS = 5 * 60 * 60 + 59 * 60
 
 
@@ -58,7 +57,6 @@ TEXT = {
         "declined": "Предложение отклонено.",
         "expired": "⌛ Срок действия предложения истёк.",
         "bad": "Формат: /offer CandyCane-3225 1000 ru stars",
-        "denied": "Эта команда доступна только администратору.",
         "help": "Создать предложение: /offer CandyCane-3225 1000 ru stars\nЯзыки: ru, en, zh. Валюты: rub, gram, stars.",
     },
     "en": {
@@ -72,7 +70,6 @@ TEXT = {
         "declined": "Offer declined.",
         "expired": "⌛ This offer has expired.",
         "bad": "Format: /offer CandyCane-3225 1000 en stars",
-        "denied": "This command is admin-only.",
         "help": "Create offer: /offer CandyCane-3225 1000 en stars\nLanguages: ru, en, zh. Currencies: rub, gram, stars.",
     },
     "zh": {
@@ -86,16 +83,11 @@ TEXT = {
         "declined": "报价已拒绝。",
         "expired": "⌛ 此报价已过期。",
         "bad": "格式：/offer CandyCane-3225 1000 zh stars",
-        "denied": "此命令仅管理员可用。",
         "help": "创建报价：/offer CandyCane-3225 1000 zh stars\n语言：ru、en、zh。币种：rub、gram、stars。",
     },
 }
 
 CURRENCIES = {"rub": "RUB", "gram": "Gram", "stars": "⭐ Stars"}
-
-
-def is_admin(update: Update) -> bool:
-    return bool(update.effective_user and ADMIN_ID and update.effective_user.id == ADMIN_ID)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -106,9 +98,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not is_admin(update):
-        await update.effective_message.reply_text(TEXT["ru"]["denied"])
-        return
     if len(context.args) != 4:
         await update.effective_message.reply_text(TEXT["ru"]["bad"])
         return
