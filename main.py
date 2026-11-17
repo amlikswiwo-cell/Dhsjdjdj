@@ -4,10 +4,12 @@ import threading
 import secrets
 import sqlite3
 import re
+import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import quote
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
     MessageHandler, filters,
@@ -31,15 +33,19 @@ def init_db():
         db.execute("""CREATE TABLE IF NOT EXISTS pending_offers (
             code TEXT PRIMARY KEY, creator_id INTEGER NOT NULL, gift TEXT NOT NULL,
             amount TEXT NOT NULL, lang TEXT NOT NULL, currency TEXT NOT NULL,
-            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            buyer_username TEXT
         )""")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(pending_offers)")}
+        if "buyer_username" not in columns:
+            db.execute("ALTER TABLE pending_offers ADD COLUMN buyer_username TEXT")
 
 
-def save_offer(code, creator_id, gift, amount, lang, currency):
+def save_offer(code, creator_id, gift, amount, lang, currency, buyer_username=None):
     with sqlite3.connect(DB_PATH) as db:
         db.execute(
-            "INSERT INTO pending_offers(code, creator_id, gift, amount, lang, currency) VALUES (?, ?, ?, ?, ?, ?)",
-            (code, creator_id, gift, amount, lang, currency),
+            "INSERT INTO pending_offers(code, creator_id, gift, amount, lang, currency, buyer_username) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (code, creator_id, gift, amount, lang, currency, buyer_username),
         )
 
 
@@ -48,7 +54,7 @@ def get_offer(code, creator_id=None):
     # and redeemed in the seller's Telegram Business chat by a different user.
     with sqlite3.connect(DB_PATH) as db:
         return db.execute(
-            "SELECT gift, amount, lang, currency FROM pending_offers WHERE code=?",
+            "SELECT gift, amount, lang, currency, buyer_username FROM pending_offers WHERE code=?",
             (code,),
         ).fetchone()
 
@@ -176,7 +182,7 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     code = secrets.token_hex(10).upper()
-    save_offer(code, update.effective_user.id, gift, amount, lang, currency)
+    save_offer(code, update.effective_user.id, gift, amount, lang, currency, update.effective_user.username)
     await update.effective_message.reply_text(
         "✅ Оффер сохранён. Скопируй код ниже и отправь его НЕ в этот личный чат с ботом, а прямо в чат продавца/покупателя, где подключён Telegram Business. Оффер появится именно в том чате, куда отправлен код.\n\n"
         f"<code>{code}</code>\n\n"
@@ -185,9 +191,24 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def send_offer(chat_id, gift, amount, lang, currency, context, business_connection_id=None):
+async def send_offer(chat_id, gift, amount, lang, currency, context, business_connection_id=None, buyer_username=None):
     t = TEXT[lang]
     gift_url = "https://t.me/nft/" + quote(gift, safe="-_")
+    username = "@" + buyer_username if buyer_username else "Покупатель"
+    try:
+        numeric_amount = float(amount)
+        amount_display = str(int(numeric_amount)) if numeric_amount.is_integer() else str(numeric_amount)
+    except (TypeError, ValueError):
+        numeric_amount = 0
+        amount_display = str(amount)
+    usd_note = f" (≈ \${numeric_amount * 0.013:.2f} USD)" if currency == "stars" else ""
+    text = (
+        f"👤 <b>{html.escape(username)}</b> предлагает купить ваш NFT-подарок:\n\n"
+        f'<a href="{html.escape(gift_url, quote=True)}">{html.escape(gift)}</a>\n\n'
+        f"💰 <b>Предложение:</b> {html.escape(amount_display)} {html.escape(CURRENCIES[currency])} 🎁{html.escape(usd_note)}\n\n"
+        f"⏳ <b>Оффер действует:</b> 5 ч 59 мин\n\n"
+        f"<i>Выберите действие ниже.</i>"
+    )
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton(t["accept"], callback_data=f"choose:{lang}"),
         InlineKeyboardButton(t["decline"], callback_data=f"decline:{lang}"),
@@ -195,24 +216,16 @@ async def send_offer(chat_id, gift, amount, lang, currency, context, business_co
     message = await context.bot.send_message(
         chat_id=chat_id,
         business_connection_id=business_connection_id,
-        text=(
-            f'{t["title"]}\n\n'
-            f'🎁 {t["gift"]}: {gift}\n'
-            f'🎨 {gift_url}\n'
-            f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\n'
-            f'⏳ {t["expires"]}: 5 ч 59 мин\n\n'
-            f'{t["prompt"]}\n'
-            'ℹ️ Выбор оффера не подтверждает оплату или передачу подарка.'
-        ),
+        text=text,
+        parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
-        disable_web_page_preview=False,
+        disable_web_page_preview=True,
     )
     context.job_queue.run_once(
         expire_offer, OFFER_SECONDS,
         data={"chat_id": message.chat_id, "message_id": message.message_id, "lang": lang},
         name=f"offer-{message.chat_id}-{message.message_id}",
     )
-
 
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Handles regular chats and Telegram Business-connected chats.
@@ -231,12 +244,12 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         return
 
     business_connection_id = getattr(message, "business_connection_id", None)
-    gift, amount, lang, currency = row
+    gift, amount, lang, currency, buyer_username = row
     try:
         # Send first. Never delete/consume the one-time code if Telegram rejects the offer.
         await send_offer(
             message.chat_id, gift, amount, lang, currency, context,
-            business_connection_id=business_connection_id,
+            business_connection_id=business_connection_id, buyer_username=buyer_username,
         )
     except Exception as exc:
         log.exception("Could not send offer to target chat; code retained for retry. Telegram error: %s", exc)
