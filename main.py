@@ -306,12 +306,15 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         elif line.startswith("💰 "):
             amount_line = line.split(":", 1)[-1].strip()
     order_id = "TG-" + secrets.token_hex(3).upper()
+    gift_url = "https://t.me/nft/" + quote(gift, safe="-_")
     accepted_text = (
-        f'{t["accepted"]}\n'
-        f'🎁 NFT: {gift}\n'
-        f'💰 {t["amount"]}: {amount_line}\n'
-        f'🧾 {t["order"]}: {order_id}\n\n'
-        f'{t["instructions"]}\n'
+        f'✅ <b>{html.escape(t["accepted"].replace("✅ ", ""))}</b>\n\n'
+        f'🎁 <b>NFT:</b> <a href="{html.escape(gift_url, quote=True)}">{html.escape(gift)}</a>\n\n'
+        f'💰 <b>{html.escape(t["amount"])}:</b> {html.escape(amount_line)}\n\n'
+        f'🧾 <b>{html.escape(t["order"])}:</b> {html.escape(order_id)}\n\n'
+        f'✨ <b>Для завершения сделки:</b>\n'
+        f'Откройте <b>профиль менеджера</b>, нажмите <b>Transfer Gift</b>, '
+        f'выберите NFT из предложения и подтвердите передачу.\n\n'
         'ℹ️ Передача не считается подтверждённой, пока её не проверят.'
     )
     keyboard = InlineKeyboardMarkup([
@@ -322,8 +325,9 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         await query.edit_message_text(
             accepted_text,
+            parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
-            disable_web_page_preview=False,
+            disable_web_page_preview=True,
         )
     except Exception:
         log.exception("Could not update accepted offer")
