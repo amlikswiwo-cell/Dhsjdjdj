@@ -8,7 +8,7 @@ import html
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import quote
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application, CallbackQueryHandler, CommandHandler, ContextTypes,
@@ -219,7 +219,7 @@ async def send_offer(chat_id, gift, amount, lang, currency, context, business_co
         text=text,
         parse_mode=ParseMode.HTML,
         reply_markup=keyboard,
-        disable_web_page_preview=True,
+        link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True, show_above_text=True),
     )
     context.job_queue.run_once(
         expire_offer, OFFER_SECONDS,
@@ -327,7 +327,7 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             accepted_text,
             parse_mode=ParseMode.HTML,
             reply_markup=keyboard,
-            disable_web_page_preview=True,
+            link_preview_options=LinkPreviewOptions(is_disabled=False, prefer_large_media=True, show_above_text=True),
         )
     except Exception:
         log.exception("Could not update accepted offer")
@@ -353,7 +353,9 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_code))
     app.add_handler(CallbackQueryHandler(handle_choice, pattern=r"^(choose|decline):(ru|en|zh)$"))
     app.add_handler(CallbackQueryHandler(handle_confirm, pattern=r"^confirm:(ru|en|zh):[A-F0-9]+$"))
-    app.run_polling()
+    # Explicitly request business_message updates; otherwise a connected Business chat
+    # can look like the bot is ignoring the one-time code.
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == "__main__":
