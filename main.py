@@ -64,6 +64,33 @@ def consume_offer(code, creator_id=None):
         db.execute("DELETE FROM pending_offers WHERE code=?", (code,))
 
 
+def get_offer_creator(code):
+    with sqlite3.connect(DB_PATH) as db:
+        row = db.execute(
+            "SELECT creator_id FROM pending_offers WHERE code=?", (code,)
+        ).fetchone()
+    return row[0] if row else None
+
+
+async def notify_offer_failure(context, code, error_text):
+    """Tell the offer creator why redemption failed; never retry policy rejections."""
+    creator_id = get_offer_creator(code)
+    if not creator_id:
+        return
+    message = (
+        "⚠️ Telegram не разрешил отправить оффер в Business-чат.\n\n"
+        f"Код {code} сохранён и не удалён.\n"
+        f"Причина от Telegram: {error_text[:500]}\n\n"
+        "Если это Peer_flood, повторные попытки не помогут, пока ограничение Telegram "
+        "не снимется. Попросите собеседника написать бизнес-аккаунту обычное сообщение "
+        "и проверьте ограничения отправки через @SpamBot. Затем попробуйте код снова."
+    )
+    try:
+        await context.bot.send_message(chat_id=creator_id, text=message)
+    except Exception as exc:
+        log.warning("Could not notify offer creator %s: %s", creator_id, type(exc).__name__)
+
+
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path in ("/", "/health", "/healthz"):
@@ -300,10 +327,25 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             # Keep the code valid so it can be retried manually after the restriction clears.
             log.error(
                 "Telegram returned Peer_flood for chat=%s business_connection=%s. "
-                "No automatic retry scheduled; code remains valid. Check the connected "
-                "Business account's sending status and wait before trying again.",
+                "No automatic retry scheduled; code remains valid. Telegram rejected the send.",
                 message.chat_id, bool(business_connection_id),
             )
+            await notify_offer_failure(context, code, str(exc))
+            return
+        if "business_peer_usage_missing" in error_text:
+            log.warning(
+                "Business connection cannot message chat=%s because the user has not "
+                "recently contacted the business account. Code remains valid.",
+                message.chat_id,
+            )
+            await notify_offer_failure(context, code, str(exc))
+            return
+        if "business_peer_invalid" in error_text or "business_connection_invalid" in error_text:
+            log.error(
+                "Business connection rejected target chat=%s (%s). Code remains valid.",
+                message.chat_id, type(exc).__name__,
+            )
+            await notify_offer_failure(context, code, str(exc))
             return
         log.warning("Could not send offer to target chat; queueing retry. Error type: %s", type(exc).__name__)
         retry_name = f"retry-code-{code}"
