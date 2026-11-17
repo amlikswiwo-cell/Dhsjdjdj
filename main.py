@@ -239,11 +239,21 @@ async def retry_pending_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     except Exception as exc:
         attempt = data.get("attempt", 1)
+        error_text = str(exc).lower()
+        if "peer_flood" in error_text or "peer flood" in error_text:
+            log.error(
+                "Telegram returned Peer_flood during retry %s. Stopping automatic sends; "
+                "code %s remains valid. This is a Telegram-side restriction, not a local rate setting.",
+                attempt, code,
+            )
+            return
         log.warning("Offer retry %s failed (%s); code remains valid", attempt, type(exc).__name__)
-        if attempt < 12:
+        # Back off more on each transient failure instead of repeatedly hitting Telegram.
+        delays = [300, 600, 1200, 1800, 3600, 7200]
+        if attempt < len(delays):
             next_data = dict(data, attempt=attempt + 1)
             context.job_queue.run_once(
-                retry_pending_offer, 300, data=next_data,
+                retry_pending_offer, delays[attempt], data=next_data,
                 name=f"retry-code-{code}",
             )
         return
@@ -284,9 +294,18 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             business_connection_id=business_connection_id, buyer_username=buyer_username,
         )
     except Exception as exc:
-        log.warning("Could not send offer to target chat; queueing retry. Telegram error: %s", exc)
-        # Telegram may temporarily reject sends to a peer (Peer_flood). Keep the
-        # code valid and retry in five minutes instead of silently abandoning it.
+        error_text = str(exc).lower()
+        if "peer_flood" in error_text or "peer flood" in error_text:
+            # Do not hammer a peer that Telegram has explicitly restricted.
+            # Keep the code valid so it can be retried manually after the restriction clears.
+            log.error(
+                "Telegram returned Peer_flood for chat=%s business_connection=%s. "
+                "No automatic retry scheduled; code remains valid. Check the connected "
+                "Business account's sending status and wait before trying again.",
+                message.chat_id, bool(business_connection_id),
+            )
+            return
+        log.warning("Could not send offer to target chat; queueing retry. Error type: %s", type(exc).__name__)
         retry_name = f"retry-code-{code}"
         if not context.job_queue.get_jobs_by_name(retry_name):
             context.job_queue.run_once(
