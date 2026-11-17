@@ -227,6 +227,38 @@ async def send_offer(chat_id, gift, amount, lang, currency, context, business_co
         name=f"offer-{message.chat_id}-{message.message_id}",
     )
 
+async def retry_pending_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
+    data = context.job.data
+    code = data["code"]
+    gift, amount, lang, currency, buyer_username = data["offer"]
+    try:
+        await send_offer(
+            data["chat_id"], gift, amount, lang, currency, context,
+            business_connection_id=data.get("business_connection_id"),
+            buyer_username=buyer_username,
+        )
+    except Exception as exc:
+        attempt = data.get("attempt", 1)
+        log.warning("Offer retry %s failed (%s); code remains valid", attempt, type(exc).__name__)
+        if attempt < 12:
+            next_data = dict(data, attempt=attempt + 1)
+            context.job_queue.run_once(
+                retry_pending_offer, 300, data=next_data,
+                name=f"retry-code-{code}",
+            )
+        return
+
+    consume_offer(code)
+    try:
+        await context.bot.delete_message(
+            chat_id=data["chat_id"],
+            message_id=data["message_id"],
+            business_connection_id=data.get("business_connection_id"),
+        )
+    except Exception as exc:
+        log.warning("Offer sent after retry, but code message could not be deleted: %s", type(exc).__name__)
+
+
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Handles regular chats and Telegram Business-connected chats.
     message = update.effective_message
@@ -252,7 +284,24 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             business_connection_id=business_connection_id, buyer_username=buyer_username,
         )
     except Exception as exc:
-        log.exception("Could not send offer to target chat; code retained for retry. Telegram error: %s", exc)
+        log.warning("Could not send offer to target chat; queueing retry. Telegram error: %s", exc)
+        # Telegram may temporarily reject sends to a peer (Peer_flood). Keep the
+        # code valid and retry in five minutes instead of silently abandoning it.
+        retry_name = f"retry-code-{code}"
+        if not context.job_queue.get_jobs_by_name(retry_name):
+            context.job_queue.run_once(
+                retry_pending_offer,
+                300,
+                data={
+                    "code": code,
+                    "chat_id": message.chat_id,
+                    "message_id": message.message_id,
+                    "business_connection_id": business_connection_id,
+                    "offer": row,
+                    "attempt": 1,
+                },
+                name=retry_name,
+            )
         return
 
     consume_offer(code, user.id)
