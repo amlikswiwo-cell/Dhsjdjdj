@@ -174,8 +174,8 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     code = secrets.token_hex(10).upper()
     save_offer(code, update.effective_user.id, gift, amount, lang, currency)
     await update.effective_message.reply_text(
-        "✅ Оффер сохранён. Нажми на код ниже, чтобы скопировать его, затем отправь в чат с покупателем:\\n\\n"
-        f"<code>{code}</code>\\n\\n"
+        "✅ Оффер сохранён. Нажми на код ниже, чтобы скопировать его, затем отправь в чат с покупателем:\n\n"
+        f"<code>{code}</code>\n\n"
         "Бот удалит сообщение с кодом и отправит оффер в этот чат.",
         parse_mode="HTML",
     )
