@@ -134,15 +134,13 @@ async def expire_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    await query.answer()
     action, lang = query.data.split(":", 1)
-    if action == "choose":
-        response = TEXT[lang]["chosen"]
-    else:
-        response = TEXT[lang]["declined"]
+    response = TEXT[lang]["chosen"] if action == "choose" else TEXT[lang]["declined"]
     try:
+        # Show the result only to the person who tapped; do not post a public reply
+        # that could expose their choice or invite contact in a group chat.
+        await query.answer(response, show_alert=True)
         await query.edit_message_reply_markup(reply_markup=None)
-        await query.message.reply_text(response)
     except Exception:
         log.exception("Could not process offer choice")
 
