@@ -1,8 +1,9 @@
 import os
 import logging
 import threading
+import secrets
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
@@ -17,6 +18,7 @@ log = logging.getLogger(__name__)
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 OFFER_SECONDS = 5 * 60 * 60 + 59 * 60
+MANAGER_LINK = "tg://send_gift?to=Autooffersgift"
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -33,15 +35,13 @@ class HealthHandler(BaseHTTPRequestHandler):
             self.end_headers()
 
     def log_message(self, format, *args):
-        # Keep routine health checks out of the logs.
         return
 
 
 def start_health_server():
     port = int(os.environ.get("PORT", "10000"))
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     log.info("Health server listening on 0.0.0.0:%s", port)
 
 
@@ -49,41 +49,65 @@ TEXT = {
     "ru": {
         "title": "🎁 Предложение по подарку",
         "gift": "Подарок",
-        "price": "Цена",
-        "expires": "Действует",
-        "accept": "✅ Выбрать предложение",
-        "decline": "✖️ Отклонить",
-        "chosen": "Вы выбрали это предложение. Дальнейшие условия нужно согласовать с продавцом.",
-        "declined": "Предложение отклонено.",
+        "price": "Предложение",
+        "expires": "Оффер действует",
+        "accept": "✅ Принять",
+        "decline": "❌ Отклонить",
+        "prompt": "Выберите действие ниже.",
+        "accepted": "✅ Предложение принято",
+        "amount": "Сумма",
+        "order": "Заказ",
+        "instructions": "✨ Для завершения сделки:\nОткройте профиль менеджера, нажмите Transfer Gift, выберите NFT из предложения и подтвердите передачу.",
+        "transfer": "🎁 Передать подарок",
+        "confirm": "✅ Подтвердить передачу",
+        "reported": "Отметка сохранена: вы сообщили о передаче. Фактическая передача подарка автоматически не проверена.",
+        "declined": "❌ Предложение отклонено.",
         "expired": "⌛ Срок действия предложения истёк.",
         "bad": "Формат: /offer CandyCane-3225 1000 ru stars",
-        "help": "Создать предложение: /offer CandyCane-3225 1000 ru stars\nЯзыки: ru, en, zh. Валюты: rub, gram, stars.",
+        "help": "Создать оффер: /offer CandyCane-3225 1000 ru stars\nЯзыки: ru, en, zh. Валюты: rub, gram, stars.",
+        "currency_note": "Валюта",
     },
     "en": {
         "title": "🎁 Gift offer",
         "gift": "Gift",
-        "price": "Price",
-        "expires": "Valid for",
-        "accept": "✅ Choose offer",
-        "decline": "✖️ Decline",
-        "chosen": "You selected this offer. Please confirm the final terms with the seller.",
-        "declined": "Offer declined.",
+        "price": "Offer",
+        "expires": "Offer valid for",
+        "accept": "✅ Accept",
+        "decline": "❌ Decline",
+        "prompt": "Choose an action below.",
+        "accepted": "✅ Offer accepted",
+        "amount": "Amount",
+        "order": "Order",
+        "instructions": "✨ To complete the deal:\nOpen the manager's profile, tap Transfer Gift, select the NFT from the offer, and confirm the transfer.",
+        "transfer": "🎁 Transfer gift",
+        "confirm": "✅ Confirm transfer",
+        "reported": "Status noted: you reported a transfer. The actual gift transfer has not been automatically verified.",
+        "declined": "❌ Offer declined.",
         "expired": "⌛ This offer has expired.",
         "bad": "Format: /offer CandyCane-3225 1000 en stars",
         "help": "Create offer: /offer CandyCane-3225 1000 en stars\nLanguages: ru, en, zh. Currencies: rub, gram, stars.",
+        "currency_note": "Currency",
     },
     "zh": {
         "title": "🎁 礼物报价",
         "gift": "礼物",
-        "price": "价格",
+        "price": "报价",
         "expires": "有效期",
-        "accept": "✅ 选择报价",
-        "decline": "✖️ 拒绝",
-        "chosen": "你已选择此报价。请与卖家确认最终交易条件。",
-        "declined": "报价已拒绝。",
-        "expired": "⌛ 此报价已过期。",
+        "accept": "✅ 接受",
+        "decline": "❌ 拒绝",
+        "prompt": "请在下方选择操作。",
+        "accepted": "✅ 已接受报价",
+        "amount": "金额",
+        "order": "订单",
+        "instructions": "✨ 完成交易：\n打开管理员资料，点击 Transfer Gift，选择报价中的 NFT 并确认转赠。",
+        "transfer": "🎁 转赠礼物",
+        "confirm": "✅ 确认转赠",
+        "reported": "已记录你的申报；系统尚未自动验证礼物是否实际转赠。",
+        "declined": "❌ 已拒绝报价。",
+        "expired": "⌛ 报价已过期。",
         "bad": "格式：/offer CandyCane-3225 1000 zh stars",
         "help": "创建报价：/offer CandyCane-3225 1000 zh stars\n语言：ru、en、zh。币种：rub、gram、stars。",
+        "currency_note": "货币",
     },
 }
 
@@ -115,20 +139,21 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     t = TEXT[lang]
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton(t["accept"], callback_data=f"choose:{lang}"),
-            InlineKeyboardButton(t["decline"], callback_data=f"decline:{lang}"),
-        ]
-    ])
+    gift_url = "https://t.me/nft/" + quote(gift, safe="-_")
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton(t["accept"], callback_data=f"choose:{lang}"),
+        InlineKeyboardButton(t["decline"], callback_data=f"decline:{lang}"),
+    ]])
     message = await update.effective_message.reply_text(
         f'{t["title"]}\n\n'
-        f'{t["gift"]}: {gift}\n'
-        f'🎨 https://t.me/nft/{gift}\n'
-        f'{t["price"]}: {amount} {CURRENCIES[currency]}\n'
-        f'{t["expires"]}: 5 ч. 59 м.\n\n'
-        "ℹ️ Выбор предложения не подтверждает оплату или передачу подарка.",
+        f'🎁 {t["gift"]}: {gift}\n'
+        f'🎨 {gift_url}\n'
+        f'💰 {t["price"]}: {amount} {CURRENCIES[currency]}\n'
+        f'⏳ {t["expires"]}: 5 ч 59 мин\n\n'
+        f'{t["prompt"]}\n'
+        'ℹ️ Выбор оффера не подтверждает оплату или передачу подарка.',
         reply_markup=keyboard,
+        disable_web_page_preview=False,
     )
     context.job_queue.run_once(
         expire_offer, OFFER_SECONDS,
@@ -153,12 +178,58 @@ async def expire_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
 async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     action, lang = query.data.split(":", 1)
-    response = TEXT[lang]["chosen"] if action == "choose" else TEXT[lang]["declined"]
+    t = TEXT[lang]
+
+    if action == "decline":
+        await query.answer(t["declined"], show_alert=True)
+        try:
+            await query.edit_message_text(t["declined"])
+        except Exception:
+            log.exception("Could not close declined offer")
+        return
+
+    # Stop the expiry timer once an offer has been accepted.
+    for job in context.job_queue.get_jobs_by_name(
+        f"offer-{query.message.chat_id}-{query.message.message_id}"
+    ):
+        job.schedule_removal()
+
+    original = query.message.text or ""
+    gift = "Gift"
+    amount_line = ""
+    for line in original.splitlines():
+        if line.startswith("🎁 "):
+            gift = line.split(": ", 1)[-1]
+        if line.startswith("💰 "):
+            amount_line = line.split(": ", 1)[-1]
+    order_id = "TG-" + secrets.token_hex(3).upper()
+    accepted_text = (
+        f'{t["accepted"]}\n'
+        f'🎁 NFT: {gift}\n'
+        f'💰 {t["amount"]}: {amount_line}\n'
+        f'🧾 {t["order"]}: {order_id}\n\n'
+        f'{t["instructions"]}\n'
+        'ℹ️ Передача не считается подтверждённой, пока её не проверят.'
+    )
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(t["transfer"], url=MANAGER_LINK)],
+        [InlineKeyboardButton(t["confirm"], callback_data=f"confirm:{lang}:{order_id}")],
+    ])
+    await query.answer(t["accepted"], show_alert=True)
     try:
-        await query.answer(response, show_alert=True)
-        await query.edit_message_reply_markup(reply_markup=None)
+        await query.edit_message_text(
+            accepted_text,
+            reply_markup=keyboard,
+            disable_web_page_preview=False,
+        )
     except Exception:
-        log.exception("Could not process offer choice")
+        log.exception("Could not update accepted offer")
+
+
+async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    _, lang, order_id = query.data.split(":", 2)
+    await query.answer(TEXT[lang]["reported"], show_alert=True)
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -172,6 +243,7 @@ def main() -> None:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("offer", offer))
     app.add_handler(CallbackQueryHandler(handle_choice, pattern=r"^(choose|decline):(ru|en|zh)$"))
+    app.add_handler(CallbackQueryHandler(handle_confirm, pattern=r"^confirm:(ru|en|zh):[A-F0-9]+$"))
     app.run_polling()
 
 
