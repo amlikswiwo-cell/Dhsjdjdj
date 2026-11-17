@@ -43,15 +43,20 @@ def save_offer(code, creator_id, gift, amount, lang, currency):
         )
 
 
-def take_offer(code, creator_id):
+def get_offer(code, creator_id):
     with sqlite3.connect(DB_PATH) as db:
-        row = db.execute(
+        return db.execute(
             "SELECT gift, amount, lang, currency FROM pending_offers WHERE code=? AND creator_id=?",
             (code, creator_id),
         ).fetchone()
-        if row:
-            db.execute("DELETE FROM pending_offers WHERE code=?", (code,))
-        return row
+
+
+def consume_offer(code, creator_id):
+    with sqlite3.connect(DB_PATH) as db:
+        db.execute(
+            "DELETE FROM pending_offers WHERE code=? AND creator_id=?",
+            (code, creator_id),
+        )
 
 
 class HealthHandler(BaseHTTPRequestHandler):
@@ -221,25 +226,28 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not CODE_RE.fullmatch(code):
         return
 
-    row = take_offer(code, user.id)
+    row = get_offer(code, user.id)
     if not row:
         log.info("Offer code not matched (sender=%s, business=%s)", user.id, bool(getattr(message, "business_connection_id", None)))
         return
 
     business_connection_id = getattr(message, "business_connection_id", None)
-    try:
-        await message.delete()
-    except Exception:
-        log.warning("Could not delete offer code message; check Telegram Business permissions or group admin rights")
-
     gift, amount, lang, currency = row
     try:
+        # Send first. Never delete/consume the one-time code if Telegram rejects the offer.
         await send_offer(
             message.chat_id, gift, amount, lang, currency, context,
             business_connection_id=business_connection_id,
         )
-    except Exception:
-        log.exception("Could not send offer to target chat")
+    except Exception as exc:
+        log.exception("Could not send offer to target chat; code retained for retry. Telegram error: %s", exc)
+        return
+
+    consume_offer(code, user.id)
+    try:
+        await message.delete()
+    except Exception as exc:
+        log.warning("Offer sent, but could not delete code message: %s", exc)
 
 
 async def expire_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
