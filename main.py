@@ -81,9 +81,10 @@ async def notify_offer_failure(context, code, error_text):
         "⚠️ Telegram не разрешил отправить оффер в Business-чат.\n\n"
         f"Код {code} сохранён и не удалён.\n"
         f"Причина от Telegram: {error_text[:500]}\n\n"
-        "Если это Peer_flood, повторные попытки не помогут, пока ограничение Telegram "
-        "не снимется. Попросите собеседника написать бизнес-аккаунту обычное сообщение "
-        "и проверьте ограничения отправки через @SpamBot. Затем попробуйте код снова."
+        "Бот не будет автоматически повторять отправку, чтобы не создавать лишние запросы. "
+        "Проверьте, что собеседник недавно писал именно этому Business-аккаунту, а также "
+        "права подключения. Если ошибка Peer_flood сохраняется, это ограничение на стороне "
+        "Telegram; код остаётся действительным."
     )
     try:
         await context.bot.send_message(chat_id=creator_id, text=message)
@@ -254,48 +255,6 @@ async def send_offer(chat_id, gift, amount, lang, currency, context, business_co
         name=f"offer-{message.chat_id}-{message.message_id}",
     )
 
-async def retry_pending_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
-    data = context.job.data
-    code = data["code"]
-    gift, amount, lang, currency, buyer_username = data["offer"]
-    try:
-        await send_offer(
-            data["chat_id"], gift, amount, lang, currency, context,
-            business_connection_id=data.get("business_connection_id"),
-            buyer_username=buyer_username,
-        )
-    except Exception as exc:
-        attempt = data.get("attempt", 1)
-        error_text = str(exc).lower()
-        if "peer_flood" in error_text or "peer flood" in error_text:
-            log.error(
-                "Telegram returned Peer_flood during retry %s. Stopping automatic sends; "
-                "code %s remains valid. This is a Telegram-side restriction, not a local rate setting.",
-                attempt, code,
-            )
-            return
-        log.warning("Offer retry %s failed (%s); code remains valid", attempt, type(exc).__name__)
-        # Back off more on each transient failure instead of repeatedly hitting Telegram.
-        delays = [300, 600, 1200, 1800, 3600, 7200]
-        if attempt < len(delays):
-            next_data = dict(data, attempt=attempt + 1)
-            context.job_queue.run_once(
-                retry_pending_offer, delays[attempt], data=next_data,
-                name=f"retry-code-{code}",
-            )
-        return
-
-    consume_offer(code)
-    try:
-        await context.bot.delete_message(
-            chat_id=data["chat_id"],
-            message_id=data["message_id"],
-            business_connection_id=data.get("business_connection_id"),
-        )
-    except Exception as exc:
-        log.warning("Offer sent after retry, but code message could not be deleted: %s", type(exc).__name__)
-
-
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Handles regular chats and Telegram Business-connected chats.
     message = update.effective_message
@@ -347,22 +306,11 @@ async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             )
             await notify_offer_failure(context, code, str(exc))
             return
-        log.warning("Could not send offer to target chat; queueing retry. Error type: %s", type(exc).__name__)
-        retry_name = f"retry-code-{code}"
-        if not context.job_queue.get_jobs_by_name(retry_name):
-            context.job_queue.run_once(
-                retry_pending_offer,
-                300,
-                data={
-                    "code": code,
-                    "chat_id": message.chat_id,
-                    "message_id": message.message_id,
-                    "business_connection_id": business_connection_id,
-                    "offer": row,
-                    "attempt": 1,
-                },
-                name=retry_name,
-            )
+        log.warning(
+            "Offer send failed (%s); no automatic retry. Code remains valid.",
+            type(exc).__name__,
+        )
+        await notify_offer_failure(context, code, str(exc))
         return
 
     consume_offer(code, user.id)
