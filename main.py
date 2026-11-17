@@ -181,7 +181,7 @@ async def offer(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def send_offer(chat_id, gift, amount, lang, currency, context):
+async def send_offer(chat_id, gift, amount, lang, currency, context, business_connection_id=None):
     t = TEXT[lang]
     gift_url = "https://t.me/nft/" + quote(gift, safe="-_")
     keyboard = InlineKeyboardMarkup([[
@@ -190,6 +190,7 @@ async def send_offer(chat_id, gift, amount, lang, currency, context):
     ]])
     message = await context.bot.send_message(
         chat_id=chat_id,
+        business_connection_id=business_connection_id,
         text=(
             f'{t["title"]}\n\n'
             f'🎁 {t["gift"]}: {gift}\n'
@@ -210,20 +211,35 @@ async def send_offer(chat_id, gift, amount, lang, currency, context):
 
 
 async def handle_code(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Handles regular chats and Telegram Business-connected chats.
     message = update.effective_message
     user = update.effective_user
-    code = (message.text or "").strip().upper()
+    if not message or not user or not message.text:
+        return
+
+    code = message.text.strip().upper()
     if not CODE_RE.fullmatch(code):
         return
+
     row = take_offer(code, user.id)
     if not row:
+        log.info("Offer code not matched (sender=%s, business=%s)", user.id, bool(getattr(message, "business_connection_id", None)))
         return
+
+    business_connection_id = getattr(message, "business_connection_id", None)
     try:
         await message.delete()
     except Exception:
-        log.warning("Could not delete offer code message; check bot admin permissions")
+        log.warning("Could not delete offer code message; check Telegram Business permissions or group admin rights")
+
     gift, amount, lang, currency = row
-    await send_offer(message.chat_id, gift, amount, lang, currency, context)
+    try:
+        await send_offer(
+            message.chat_id, gift, amount, lang, currency, context,
+            business_connection_id=business_connection_id,
+        )
+    except Exception:
+        log.exception("Could not send offer to target chat")
 
 
 async def expire_offer(context: ContextTypes.DEFAULT_TYPE) -> None:
