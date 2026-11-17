@@ -295,13 +295,16 @@ async def handle_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         job.schedule_removal()
 
     original = query.message.text or ""
+    lines = [line.strip() for line in original.splitlines() if line.strip()]
     gift = "Gift"
     amount_line = ""
-    for line in original.splitlines():
-        if line.startswith("🎁 "):
-            gift = line.split(": ", 1)[-1]
-        if line.startswith("💰 "):
-            amount_line = line.split(": ", 1)[-1]
+    for i, line in enumerate(lines):
+        if "предлагает купить ваш NFT-подарок:" in line and i + 1 < len(lines):
+            gift = lines[i + 1]
+        if line.startswith("💰 Предложение:"):
+            amount_line = line.split(":", 1)[-1].strip()
+        elif line.startswith("💰 "):
+            amount_line = line.split(":", 1)[-1].strip()
     order_id = "TG-" + secrets.token_hex(3).upper()
     accepted_text = (
         f'{t["accepted"]}\n'
