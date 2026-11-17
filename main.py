@@ -201,7 +201,7 @@ async def send_offer(chat_id, gift, amount, lang, currency, context, business_co
     except (TypeError, ValueError):
         numeric_amount = 0
         amount_display = str(amount)
-    usd_note = f" (≈ \${numeric_amount * 0.013:.2f} USD)" if currency == "stars" else ""
+    usd_note = f" (≈ ${numeric_amount * 0.013:.2f} USD)" if currency == "stars" else ""
     text = (
         f"👤 <b>{html.escape(username)}</b> предлагает купить ваш NFT-подарок:\n\n"
         f'<a href="{html.escape(gift_url, quote=True)}">{html.escape(gift)}</a>\n\n'
